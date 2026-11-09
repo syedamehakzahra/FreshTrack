@@ -1,0 +1,320 @@
+import 'package:flutter/material.dart';
+import '../models/food_item.dart';
+import '../models/recipe.dart';
+import '../services/food_service.dart';
+import '../services/recipe_service.dart';
+import 'recipe_detail_screen.dart';
+
+class RecipeScreen extends StatefulWidget {
+  const RecipeScreen({super.key});
+
+  @override
+  State<RecipeScreen> createState() => _RecipeScreenState();
+}
+
+class _RecipeScreenState extends State<RecipeScreen> {
+  final RecipeService _recipeService = RecipeService();
+  final FoodService _foodService = FoodService();
+  final TextEditingController _searchController = TextEditingController();
+
+  List<Recipe> _recipes = [];
+  bool _loading = false;
+  String? _error;
+  String? _selectedIngredient;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialRecipes();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadInitialRecipes() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final results = await _recipeService.getRandomRecipes(count: 6);
+      if (mounted) {
+        setState(() {
+          _recipes = results;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not load recipes. Check internet connection.';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _search(String query) async {
+    final text = query.trim();
+    if (text.isEmpty) return;
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      _selectedIngredient = null;
+    });
+
+    try {
+      final results = await _recipeService.searchRecipes(text);
+      if (mounted) {
+        setState(() {
+          _recipes = results;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Search failed: $e';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _filterByIngredient(String ingredient) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _selectedIngredient = ingredient;
+      _searchController.text = ingredient;
+    });
+
+    try {
+      final results = await _recipeService.getRecipesByIngredient(ingredient);
+      if (mounted) {
+        setState(() {
+          _recipes = results;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not find recipes for "$ingredient".';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Discover Recipes'),
+      ),
+      body: Column(
+        children: [
+          // Search Bar
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search meals or ingredients...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                          _loadInitialRecipes();
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              ),
+              onSubmitted: _search,
+            ),
+          ),
+
+          // Pantry Quick Chips (Uses ingredients from Firestore)
+          StreamBuilder<List<FoodItem>>(
+            stream: _foodService.streamItems(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                return const SizedBox.shrink();
+              }
+              final pantryItems = snapshot.data!
+                  .where((item) => item.status != 'Expired')
+                  .toList();
+              if (pantryItems.isEmpty) return const SizedBox.shrink();
+
+              return SizedBox(
+                height: 48,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  itemCount: pantryItems.length,
+                  itemBuilder: (context, index) {
+                    final item = pantryItems[index];
+                    final isSelected = _selectedIngredient == item.name;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: FilterChip(
+                        avatar: const Icon(Icons.restaurant_menu, size: 16),
+                        label: Text(item.name),
+                        selected: isSelected,
+                        onSelected: (_) => _filterByIngredient(item.name),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+
+          // Recipe Results Grid / List
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.error_outline,
+                                  size: 48, color: colorScheme.error),
+                              const SizedBox(height: 8),
+                              Text(_error!, textAlign: TextAlign.center),
+                              const SizedBox(height: 12),
+                              FilledButton.tonal(
+                                onPressed: _loadInitialRecipes,
+                                child: const Text('Try Again'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : _recipes.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No recipes found.\nTry searching another ingredient!',
+                              textAlign: TextAlign.center,
+                            ),
+                          )
+                        : GridView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                              childAspectRatio: 0.82,
+                            ),
+                            itemCount: _recipes.length,
+                            itemBuilder: (context, index) {
+                              final recipe = _recipes[index];
+                              return InkWell(
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        RecipeDetailScreen(recipe: recipe),
+                                  ),
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                child: Card(
+                                  elevation: 2,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: recipe.thumbnail.isNotEmpty
+                                            ? Image.network(
+                                                recipe.thumbnail,
+                                                width: double.infinity,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, __, ___) =>
+                                                    Container(
+                                                  color: colorScheme
+                                                      .surfaceVariant,
+                                                  child: const Center(
+                                                    child: Icon(
+                                                        Icons.restaurant,
+                                                        size: 40),
+                                                  ),
+                                                ),
+                                              )
+                                            : Container(
+                                                color: colorScheme
+                                                    .surfaceVariant,
+                                                child: const Center(
+                                                  child: Icon(
+                                                      Icons.restaurant,
+                                                      size: 40),
+                                                ),
+                                              ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.all(10),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              recipe.title,
+                                              style: theme
+                                                  .textTheme.bodyMedium
+                                                  ?.copyWith(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            if (recipe.category.isNotEmpty) ...[
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                recipe.category,
+                                                style: theme
+                                                    .textTheme.bodySmall
+                                                    ?.copyWith(
+                                                  color: colorScheme.outline,
+                                                ),
+                                                maxLines: 1,
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -1,30 +1,47 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:freshtrack/main.dart';
+import 'package:freshtrack/models/food_item.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('FoodItem Model Tests', () {
+    test('Calculates daysLeft and status correctly for fresh items', () {
+      final futureDate = DateTime.now().add(const Duration(days: 5));
+      final item = FoodItem(
+        id: '1',
+        name: 'Milk',
+        category: 'Dairy',
+        quantity: 2,
+        expiryDate: futureDate,
+      );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+      expect(item.status, 'Fresh');
+      expect(item.daysLeft, greaterThanOrEqualTo(4));
+    });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    test('Calculates status correctly for expiring soon items', () {
+      final soonDate = DateTime.now().add(const Duration(days: 2));
+      final item = FoodItem(
+        id: '2',
+        name: 'Bread',
+        category: 'Bakery',
+        quantity: 1,
+        expiryDate: soonDate,
+      );
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+      expect(item.status, 'Expiring soon');
+    });
+
+    test('Calculates status correctly for expired items', () {
+      final pastDate = DateTime.now().subtract(const Duration(days: 1));
+      final item = FoodItem(
+        id: '3',
+        name: 'Yogurt',
+        category: 'Dairy',
+        quantity: 1,
+        expiryDate: pastDate,
+      );
+
+      expect(item.status, 'Expired');
+      expect(item.daysLeft, lessThan(0));
+    });
   });
 }

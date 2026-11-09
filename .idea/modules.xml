@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/FreshTrack.iml" filepath="$PROJECT_DIR$/.idea/FreshTrack.iml" />
+      <module fileurl="file://$PROJECT_DIR$/android/freshtrack_android.iml" filepath="$PROJECT_DIR$/android/freshtrack_android.iml" />
     </modules>
   </component>
 </project>
