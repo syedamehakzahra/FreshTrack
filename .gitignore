@@ -27,3 +27,11 @@ doc/api/
 
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# Firebase configuration files
+android/app/google-services.json
+lib/firebase_options.dart
+firebase.json
+build_log.txt
+flutter_verbose.txt
+gradle_flutter_debug.txt
