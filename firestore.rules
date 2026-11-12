@@ -1,0 +1,156 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidStorageLocation(val) {
+      return val in ['Fridge', 'Freezer', 'Pantry'];
+    }
+
+    function isOptionalPositivePrice(data) {
+      return !('totalPrice' in data) ||
+        data.totalPrice == null ||
+        ((data.totalPrice is int || data.totalPrice is float) &&
+          data.totalPrice > 0);
+    }
+
+    function isValidPantryBase(data) {
+      return data.keys().hasAll([
+          'name',
+          'category',
+          'quantity',
+          'expiryDate'
+        ]) &&
+        data.name is string &&
+        data.name.trim().size() > 0 &&
+        data.name.size() <= 500 &&
+        data.category is string &&
+        data.category.trim().size() > 0 &&
+        data.category.size() <= 100 &&
+        data.quantity is int &&
+        data.quantity >= 1 &&
+        data.expiryDate is timestamp &&
+        isOptionalPositivePrice(data);
+    }
+
+    function isValidPantryCreate(data) {
+      return isValidPantryBase(data) &&
+        'storageLocation' in data &&
+        isValidStorageLocation(data.storageLocation) &&
+        'originalQuantity' in data &&
+        data.originalQuantity is int &&
+        data.originalQuantity >= data.quantity;
+    }
+
+    function isValidPantryUpdate(data) {
+      return isValidPantryBase(data) &&
+        (!('storageLocation' in data) ||
+          isValidStorageLocation(data.storageLocation)) &&
+        'originalQuantity' in data &&
+        data.originalQuantity is int &&
+        data.originalQuantity >= data.quantity;
+    }
+
+    function isValidShoppingSource(val) {
+      return val in ['manual', 'pantry', 'buy_again'];
+    }
+
+    function isValidWasteAction(val) {
+      return val in ['consumed', 'wasted'];
+    }
+
+    function isValidWasteLog(data) {
+      return data.keys().hasAll([
+          'foodName',
+          'category',
+          'quantity',
+          'action',
+          'timestamp'
+        ]) &&
+        data.foodName is string &&
+        data.foodName.trim().size() > 0 &&
+        data.foodName.size() <= 500 &&
+        data.category is string &&
+        data.category.trim().size() > 0 &&
+        data.category.size() <= 100 &&
+        data.quantity is int &&
+        data.quantity >= 1 &&
+        data.action is string &&
+        isValidWasteAction(data.action) &&
+        data.timestamp is timestamp &&
+        (!('sourceItemId' in data) ||
+          data.sourceItemId == null ||
+          (data.sourceItemId is string &&
+            data.sourceItemId.trim().size() > 0 &&
+            data.sourceItemId.size() <= 1500)) &&
+        (!('originalQuantity' in data) ||
+          data.originalQuantity == null ||
+          (data.originalQuantity is int &&
+            data.originalQuantity >= data.quantity)) &&
+        (!('originalTotalPrice' in data) ||
+          data.originalTotalPrice == null ||
+          ((data.originalTotalPrice is int || data.originalTotalPrice is float) &&
+            data.originalTotalPrice > 0)) &&
+        (!('financialValue' in data) ||
+          data.financialValue == null ||
+          ((data.financialValue is int || data.financialValue is float) &&
+            data.financialValue >= 0));
+    }
+
+    function isValidShoppingItem(data) {
+      return data.keys().hasAll([
+          'name',
+          'normalizedName',
+          'category',
+          'storageLocation',
+          'quantity',
+          'isChecked',
+          'source',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.name is string &&
+        data.name.trim().size() > 0 &&
+        data.name.size() <= 500 &&
+        data.normalizedName is string &&
+        data.normalizedName.trim().size() > 0 &&
+        data.category is string &&
+        data.category.trim().size() > 0 &&
+        isValidStorageLocation(data.storageLocation) &&
+        data.quantity is int &&
+        data.quantity >= 1 &&
+        data.isChecked is bool &&
+        isValidShoppingSource(data.source) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /items/{itemId} {
+        allow read, delete: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidPantryCreate(request.resource.data);
+        allow update: if isOwner(userId) && isValidPantryUpdate(request.resource.data);
+      }
+
+      match /waste_logs/{logId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidWasteLog(request.resource.data);
+        allow update, delete: if false;
+      }
+
+      match /shopping_list/{shoppingItemId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidShoppingItem(request.resource.data);
+      }
+    }
+  }
+}

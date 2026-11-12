@@ -20,35 +20,35 @@ class Recipe {
   factory Recipe.fromMealJson(Map<String, dynamic> json) {
     final ingredientsList = <String>[];
     for (int i = 1; i <= 20; i++) {
-      final ingredient = json['strIngredient$i'];
-      final measure = json['strMeasure$i'];
-      if (ingredient != null &&
-          ingredient is String &&
-          ingredient.trim().isNotEmpty) {
+      final rawIngredient = json['strIngredient$i'];
+      final rawMeasure = json['strMeasure$i'];
+      final ingredient =
+          rawIngredient is String ? rawIngredient.trim() : '';
+      if (ingredient.isNotEmpty) {
         final measureStr =
-            (measure != null && measure is String && measure.trim().isNotEmpty)
-                ? ' (${measure.trim()})'
+            (rawMeasure is String && rawMeasure.trim().isNotEmpty)
+                ? ' (${rawMeasure.trim()})'
                 : '';
-        ingredientsList.add('${ingredient.trim()}$measureStr');
+        ingredientsList.add('$ingredient$measureStr');
       }
     }
 
     return Recipe(
-      id: json['idMeal'] ?? '',
-      title: json['strMeal'] ?? '',
-      thumbnail: json['strMealThumb'] ?? '',
-      category: json['strCategory'] ?? '',
-      area: json['strArea'] ?? '',
-      instructions: json['strInstructions'] ?? '',
+      id: (json['idMeal'] ?? '').toString(),
+      title: (json['strMeal'] ?? '').toString(),
+      thumbnail: (json['strMealThumb'] ?? '').toString(),
+      category: (json['strCategory'] ?? '').toString(),
+      area: (json['strArea'] ?? '').toString(),
+      instructions: (json['strInstructions'] ?? '').toString(),
       ingredients: ingredientsList,
     );
   }
 
   factory Recipe.fromFilterJson(Map<String, dynamic> json) {
     return Recipe(
-      id: json['idMeal'] ?? '',
-      title: json['strMeal'] ?? '',
-      thumbnail: json['strMealThumb'] ?? '',
+      id: (json['idMeal'] ?? '').toString(),
+      title: (json['strMeal'] ?? '').toString(),
+      thumbnail: (json['strMealThumb'] ?? '').toString(),
     );
   }
 }

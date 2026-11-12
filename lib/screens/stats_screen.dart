@@ -2,13 +2,116 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/waste_log.dart';
 import '../services/stats_service.dart';
+import '../utils/price_formatter.dart';
 
-class StatsScreen extends StatelessWidget {
-  const StatsScreen({super.key});
+class StatsSummary {
+  final int totalConsumed;
+  final int totalWasted;
+  final int efficiency;
+  final Map<String, int> wasteByCategory;
+  final int pricedConsumedCount;
+  final int pricedWastedCount;
+  final int unpricedLogCount;
+  final double? estimatedConsumedValue;
+  final double? wasteCost;
+
+  const StatsSummary({
+    required this.totalConsumed,
+    required this.totalWasted,
+    required this.efficiency,
+    required this.wasteByCategory,
+    required this.pricedConsumedCount,
+    required this.pricedWastedCount,
+    required this.unpricedLogCount,
+    required this.estimatedConsumedValue,
+    required this.wasteCost,
+  });
+
+  factory StatsSummary.fromLogs(List<WasteLog> logs) {
+    final consumedLogs = logs.where((l) => l.action == 'consumed').toList();
+    final wastedLogs = logs.where((l) => l.action == 'wasted').toList();
+
+    final totalConsumed =
+        consumedLogs.fold<int>(0, (sum, l) => sum + l.quantity);
+    final totalWasted = wastedLogs.fold<int>(0, (sum, l) => sum + l.quantity);
+    final totalAll = totalConsumed + totalWasted;
+    final efficiency =
+        totalAll > 0 ? ((totalConsumed / totalAll) * 100).round() : 100;
+
+    final wasteByCategory = <String, int>{};
+    for (final log in wastedLogs) {
+      wasteByCategory[log.category] =
+          (wasteByCategory[log.category] ?? 0) + log.quantity;
+    }
+
+    final pricedConsumed =
+        consumedLogs.where((l) => l.financialValue != null).toList();
+    final pricedWasted =
+        wastedLogs.where((l) => l.financialValue != null).toList();
+
+    final consumedValue = pricedConsumed.isEmpty
+        ? null
+        : roundPrice(
+            pricedConsumed.fold<double>(
+              0,
+              (sum, l) => sum + l.financialValue!,
+            ),
+          );
+    final wasteValue = pricedWasted.isEmpty
+        ? null
+        : roundPrice(
+            pricedWasted.fold<double>(
+              0,
+              (sum, l) => sum + l.financialValue!,
+            ),
+          );
+
+    return StatsSummary(
+      totalConsumed: totalConsumed,
+      totalWasted: totalWasted,
+      efficiency: efficiency,
+      wasteByCategory: wasteByCategory,
+      pricedConsumedCount: pricedConsumed.length,
+      pricedWastedCount: pricedWasted.length,
+      unpricedLogCount:
+          logs.length - pricedConsumed.length - pricedWasted.length,
+      estimatedConsumedValue: consumedValue,
+      wasteCost: wasteValue,
+    );
+  }
+}
+
+class StatsScreen extends StatefulWidget {
+  final String? userId;
+
+  const StatsScreen({super.key, this.userId});
+
+  @override
+  State<StatsScreen> createState() => _StatsScreenState();
+}
+
+class _StatsScreenState extends State<StatsScreen> {
+  late StatsService _statsService;
+  late Stream<List<WasteLog>> _logsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _statsService = StatsService(userId: widget.userId);
+    _logsStream = _statsService.streamLogs();
+  }
+
+  @override
+  void didUpdateWidget(covariant StatsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId != widget.userId) {
+      _statsService = StatsService(userId: widget.userId);
+      _logsStream = _statsService.streamLogs();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final statsService = StatsService();
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -17,12 +120,8 @@ class StatsScreen extends StatelessWidget {
         title: const Text('Waste & Consumption Stats'),
       ),
       body: StreamBuilder<List<WasteLog>>(
-        stream: statsService.streamLogs(),
+        stream: _logsStream,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
           if (snapshot.hasError) {
             return Center(
               child: Padding(
@@ -30,6 +129,11 @@ class StatsScreen extends StatelessWidget {
                 child: Text('Error: ${snapshot.error}'),
               ),
             );
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
           }
 
           final logs = snapshot.data ?? [];
@@ -63,25 +167,12 @@ class StatsScreen extends StatelessWidget {
             );
           }
 
-          final consumedLogs = logs.where((l) => l.action == 'consumed').toList();
-          final wastedLogs = logs.where((l) => l.action == 'wasted').toList();
-
-          final totalConsumed =
-              consumedLogs.fold<int>(0, (sum, l) => sum + l.quantity);
-          final totalWasted =
-              wastedLogs.fold<int>(0, (sum, l) => sum + l.quantity);
+          final summary = StatsSummary.fromLogs(logs);
+          final totalConsumed = summary.totalConsumed;
+          final totalWasted = summary.totalWasted;
           final totalAll = totalConsumed + totalWasted;
-
-          final efficiency = totalAll > 0
-              ? ((totalConsumed / totalAll) * 100).round()
-              : 100;
-
-          // Category breakdown for wasted items
-          final wasteByCategory = <String, int>{};
-          for (final log in wastedLogs) {
-            wasteByCategory[log.category] =
-                (wasteByCategory[log.category] ?? 0) + log.quantity;
-          }
+          final efficiency = summary.efficiency;
+          final wasteByCategory = summary.wasteByCategory;
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -210,6 +301,114 @@ class StatsScreen extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+
+              // Financial KPI Row: Estimated Food Value Consumed vs Waste Cost
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Card(
+                        color: Colors.teal.shade50,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: Colors.teal.shade200),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 16),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.savings_outlined,
+                                  color: Colors.teal.shade700, size: 28),
+                              const SizedBox(height: 6),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  summary.estimatedConsumedValue != null
+                                      ? formatPkr(summary.estimatedConsumedValue!)
+                                      : '--',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    color: Colors.teal.shade900,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Estimated Food Value Consumed',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.teal.shade800,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Card(
+                        color: Colors.deepOrange.shade50,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: Colors.deepOrange.shade200),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 16),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.money_off_csred_outlined,
+                                  color: Colors.deepOrange.shade700, size: 28),
+                              const SizedBox(height: 6),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  summary.wasteCost != null
+                                      ? formatPkr(summary.wasteCost!)
+                                      : '--',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    color: Colors.deepOrange.shade900,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Waste Cost',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.deepOrange.shade800,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (summary.unpricedLogCount > 0) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Excludes ${summary.unpricedLogCount} unpriced '
+                  '${summary.unpricedLogCount == 1 ? 'entry' : 'entries'} from Rs. totals.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.outline,
+                  ),
+                ),
+              ],
               const SizedBox(height: 20),
 
               // Waste by Category
@@ -306,7 +505,9 @@ class StatsScreen extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     subtitle: Text(
-                      '${log.category} • Qty: ${log.quantity}\n$dateFormatted',
+                      '${log.category} • Qty: ${log.quantity}'
+                      '${log.financialValue != null ? ' • ${formatPkr(log.financialValue!)}' : ''}'
+                      '\n$dateFormatted',
                     ),
                     trailing: Chip(
                       label: Text(

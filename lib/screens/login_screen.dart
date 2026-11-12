@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../services/user_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -38,12 +39,21 @@ class _LoginScreenState extends State<LoginScreen> {
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
 
+      User? user;
       if (_isLogin) {
-        await FirebaseAuth.instance
+        final credential = await FirebaseAuth.instance
             .signInWithEmailAndPassword(email: email, password: password);
+        user = credential.user;
+        if (user != null) {
+          await UserService().ensureUserDocument(user, isNewUser: false);
+        }
       } else {
-        await FirebaseAuth.instance
+        final credential = await FirebaseAuth.instance
             .createUserWithEmailAndPassword(email: email, password: password);
+        user = credential.user;
+        if (user != null) {
+          await UserService().ensureUserDocument(user, isNewUser: true);
+        }
       }
       // On success, AuthGate in main.dart switches the screen by itself.
     } on FirebaseAuthException catch (e) {

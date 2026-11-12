@@ -1,9 +1,64 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/recipe.dart';
 
 class RecipeService {
-  static const String _baseUrl = 'https://www.themealdb.com/api/json/v1/1';
+  static const String _host = 'www.themealdb.com';
+  static const String _basePath = '/api/json/v1/1';
+  static const Duration defaultTimeout = Duration(seconds: 10);
+
+  final http.Client _client;
+  final Duration timeout;
+
+  RecipeService({
+    http.Client? client,
+    this.timeout = defaultTimeout,
+  }) : _client = client ?? http.Client();
+
+  Future<Map<String, dynamic>> _getJsonObject(
+    Uri uri,
+    String errorContext,
+  ) async {
+    try {
+      final response = await _client.get(uri).timeout(timeout);
+      if (response.statusCode != 200) {
+        throw Exception('$errorContext (HTTP ${response.statusCode})');
+      }
+      final decoded = json.decode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Expected a JSON object response.');
+      }
+      return decoded;
+    } on TimeoutException {
+      throw Exception('Request timed out. Please check your internet connection.');
+    } on FormatException {
+      throw Exception('Received invalid recipe data from server.');
+    } on http.ClientException catch (e) {
+      throw Exception('Network error: ${e.message}');
+    }
+  }
+
+  List<Recipe> _parseMeals(
+    Map<String, dynamic> data,
+    Recipe Function(Map<String, dynamic>) mapper,
+  ) {
+    final meals = data['meals'];
+    if (meals == null) return const [];
+    if (meals is! List) {
+      throw Exception('Received invalid recipe data from server.');
+    }
+
+    final parsed = <Recipe>[];
+    for (final entry in meals) {
+      if (entry is Map<String, dynamic>) {
+        parsed.add(mapper(entry));
+      } else if (entry is Map) {
+        parsed.add(mapper(Map<String, dynamic>.from(entry)));
+      }
+    }
+    return parsed;
+  }
 
   /// Search recipes by meal name or keyword
   Future<List<Recipe>> searchRecipes(String query) async {
@@ -12,72 +67,70 @@ class RecipeService {
       return getRandomRecipes(count: 6);
     }
 
-    final uri = Uri.parse('$_baseUrl/search.php?s=$trimmed');
-    final response = await http.get(uri);
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final meals = data['meals'] as List<dynamic>?;
-      if (meals == null) return [];
-      return meals
-          .map((m) => Recipe.fromMealJson(m as Map<String, dynamic>))
-          .toList();
-    } else {
-      throw Exception('Failed to load recipes');
-    }
+    final uri = Uri.https(_host, '$_basePath/search.php', {'s': trimmed});
+    final data = await _getJsonObject(uri, 'Failed to load recipes');
+    return _parseMeals(data, Recipe.fromMealJson);
   }
 
   /// Get recipes by a specific ingredient (e.g. Chicken, Tomato, Egg)
   Future<List<Recipe>> getRecipesByIngredient(String ingredient) async {
-    final cleanIngredient = Uri.encodeComponent(ingredient.trim());
-    final uri = Uri.parse('$_baseUrl/filter.php?i=$cleanIngredient');
-    final response = await http.get(uri);
+    final trimmed = ingredient.trim();
+    if (trimmed.isEmpty) return const [];
 
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final meals = data['meals'] as List<dynamic>?;
-      if (meals == null) return [];
-      return meals
-          .map((m) => Recipe.fromFilterJson(m as Map<String, dynamic>))
-          .toList();
-    } else {
-      throw Exception('Failed to load recipes for $ingredient');
-    }
+    final uri = Uri.https(_host, '$_basePath/filter.php', {'i': trimmed});
+    final data = await _getJsonObject(
+      uri,
+      'Failed to load recipes for $trimmed',
+    );
+    return _parseMeals(data, Recipe.fromFilterJson);
   }
 
   /// Fetch full details and instructions for a specific meal
   Future<Recipe?> getRecipeDetails(String id) async {
-    final uri = Uri.parse('$_baseUrl/lookup.php?i=$id');
-    final response = await http.get(uri);
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) return null;
 
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final meals = data['meals'] as List<dynamic>?;
-      if (meals == null || meals.isEmpty) return null;
-      return Recipe.fromMealJson(meals.first as Map<String, dynamic>);
-    } else {
-      throw Exception('Failed to fetch recipe details');
-    }
+    final uri = Uri.https(_host, '$_basePath/lookup.php', {'i': trimmed});
+    final data = await _getJsonObject(uri, 'Failed to fetch recipe details');
+    final list = _parseMeals(data, Recipe.fromMealJson);
+    return list.isEmpty ? null : list.first;
   }
 
-  /// Fetch multiple random recipes for initial discovery
+  Future<Recipe?> _fetchSingleRandomRecipe() async {
+    final uri = Uri.https(_host, '$_basePath/random.php');
+    final data = await _getJsonObject(uri, 'Failed to load random recipe');
+    final list = _parseMeals(data, Recipe.fromMealJson);
+    return list.isEmpty ? null : list.first;
+  }
+
+  /// Fetch multiple unique random recipes in parallel for initial discovery
   Future<List<Recipe>> getRandomRecipes({int count = 6}) async {
-    final List<Recipe> results = [];
-    for (int i = 0; i < count; i++) {
-      try {
-        final uri = Uri.parse('$_baseUrl/random.php');
-        final response = await http.get(uri);
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final meals = data['meals'] as List<dynamic>?;
-          if (meals != null && meals.isNotEmpty) {
-            results.add(Recipe.fromMealJson(meals.first as Map<String, dynamic>));
-          }
+    if (count < 1) return const [];
+
+    Object? firstError;
+    final fetched = await Future.wait<Recipe?>(
+      List.generate(count, (_) async {
+        try {
+          return await _fetchSingleRandomRecipe();
+        } catch (e) {
+          firstError ??= e;
+          return null;
         }
-      } catch (_) {
-        // Continue if single random call fails
+      }),
+    );
+
+    final seenIds = <String>{};
+    final uniqueResults = <Recipe>[];
+    for (final recipe in fetched) {
+      if (recipe == null || recipe.id.isEmpty) continue;
+      if (seenIds.add(recipe.id)) {
+        uniqueResults.add(recipe);
       }
     }
-    return results;
+
+    if (uniqueResults.isEmpty && firstError != null) {
+      throw firstError!;
+    }
+    return uniqueResults;
   }
 }

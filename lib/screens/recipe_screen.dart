@@ -6,15 +6,27 @@ import '../services/recipe_service.dart';
 import 'recipe_detail_screen.dart';
 
 class RecipeScreen extends StatefulWidget {
-  const RecipeScreen({super.key});
+  final String? userId;
+  final String? initialIngredient;
+  final Stream<List<FoodItem>>? itemsStream;
+  final RecipeService? recipeService;
+
+  const RecipeScreen({
+    super.key,
+    this.userId,
+    this.initialIngredient,
+    this.itemsStream,
+    this.recipeService,
+  });
 
   @override
   State<RecipeScreen> createState() => _RecipeScreenState();
 }
 
 class _RecipeScreenState extends State<RecipeScreen> {
-  final RecipeService _recipeService = RecipeService();
-  final FoodService _foodService = FoodService();
+  late RecipeService _recipeService;
+  late FoodService _foodService;
+  late Stream<List<FoodItem>> _itemsStream;
   final TextEditingController _searchController = TextEditingController();
 
   List<Recipe> _recipes = [];
@@ -25,7 +37,34 @@ class _RecipeScreenState extends State<RecipeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadInitialRecipes();
+    _recipeService = widget.recipeService ?? RecipeService();
+    _foodService = FoodService(userId: widget.userId);
+    _itemsStream = widget.itemsStream ?? _foodService.streamItems();
+    final initial = widget.initialIngredient?.trim();
+    if (initial != null && initial.isNotEmpty) {
+      _filterByIngredient(initial, isInitial: true);
+    } else {
+      _loadInitialRecipes(isInitial: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant RecipeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.recipeService != widget.recipeService) {
+      _recipeService = widget.recipeService ?? RecipeService();
+    }
+    if (oldWidget.userId != widget.userId ||
+        oldWidget.itemsStream != widget.itemsStream) {
+      _foodService = FoodService(userId: widget.userId);
+      _itemsStream = widget.itemsStream ?? _foodService.streamItems();
+    }
+    final nextIngredient = widget.initialIngredient?.trim();
+    if (oldWidget.initialIngredient != widget.initialIngredient &&
+        nextIngredient != null &&
+        nextIngredient.isNotEmpty) {
+      _filterByIngredient(nextIngredient, isInitial: true);
+    }
   }
 
   @override
@@ -34,11 +73,16 @@ class _RecipeScreenState extends State<RecipeScreen> {
     super.dispose();
   }
 
-  Future<void> _loadInitialRecipes() async {
-    setState(() {
+  Future<void> _loadInitialRecipes({bool isInitial = false}) async {
+    if (isInitial) {
       _loading = true;
       _error = null;
-    });
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final results = await _recipeService.getRandomRecipes(count: 6);
@@ -86,13 +130,23 @@ class _RecipeScreenState extends State<RecipeScreen> {
     }
   }
 
-  Future<void> _filterByIngredient(String ingredient) async {
-    setState(() {
+  Future<void> _filterByIngredient(
+    String ingredient, {
+    bool isInitial = false,
+  }) async {
+    if (isInitial) {
       _loading = true;
       _error = null;
       _selectedIngredient = ingredient;
       _searchController.text = ingredient;
-    });
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _selectedIngredient = ingredient;
+        _searchController.text = ingredient;
+      });
+    }
 
     try {
       final results = await _recipeService.getRecipesByIngredient(ingredient);
@@ -136,6 +190,7 @@ class _RecipeScreenState extends State<RecipeScreen> {
                         icon: const Icon(Icons.clear),
                         onPressed: () {
                           _searchController.clear();
+                          setState(() => _selectedIngredient = null);
                           _loadInitialRecipes();
                         },
                       )
@@ -145,38 +200,49 @@ class _RecipeScreenState extends State<RecipeScreen> {
                 ),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16),
               ),
+              onChanged: (_) => setState(() {}),
               onSubmitted: _search,
             ),
           ),
 
           // Pantry Quick Chips (Uses ingredients from Firestore)
           StreamBuilder<List<FoodItem>>(
-            stream: _foodService.streamItems(),
+            stream: _itemsStream,
             builder: (context, snapshot) {
               if (!snapshot.hasData || snapshot.data!.isEmpty) {
                 return const SizedBox.shrink();
               }
-              final pantryItems = snapshot.data!
-                  .where((item) => item.status != 'Expired')
-                  .toList();
-              if (pantryItems.isEmpty) return const SizedBox.shrink();
+              final seenIngredients = <String>{};
+              final ingredientNames = <String>[];
+              for (final item in snapshot.data!) {
+                if (item.alertLevel == ExpiryAlertLevel.expired) continue;
+                final cleaned = FoodItem.cleanDisplayName(item.name);
+                final normalized = FoodItem.normalizeName(cleaned);
+                if (normalized.isEmpty || !seenIngredients.add(normalized)) {
+                  continue;
+                }
+                ingredientNames.add(cleaned);
+              }
+              if (ingredientNames.isEmpty) return const SizedBox.shrink();
 
               return SizedBox(
                 height: 48,
                 child: ListView.builder(
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: pantryItems.length,
+                  itemCount: ingredientNames.length,
                   itemBuilder: (context, index) {
-                    final item = pantryItems[index];
-                    final isSelected = _selectedIngredient == item.name;
+                    final ingredient = ingredientNames[index];
+                    final isSelected = _selectedIngredient != null &&
+                        FoodItem.normalizeName(_selectedIngredient!) ==
+                            FoodItem.normalizeName(ingredient);
                     return Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: FilterChip(
                         avatar: const Icon(Icons.restaurant_menu, size: 16),
-                        label: Text(item.name),
+                        label: Text(ingredient),
                         selected: isSelected,
-                        onSelected: (_) => _filterByIngredient(item.name),
+                        onSelected: (_) => _filterByIngredient(ingredient),
                       ),
                     );
                   },
